@@ -4,19 +4,22 @@ This script synchronizes two directories, a source and a destination, by copying
 
 ## Setup
 
-1.  **Create a virtual environment:**
+1.  **Install `uv`:**
+    Follow the instructions at [https://astral.sh/uv#installation](https://astral.sh/uv#installation) to install `uv`.
+
+2.  **Create a virtual environment:**
     ```bash
-    python3 -m venv venv
+    uv venv
     ```
 
-2.  **Activate the virtual environment:**
+3.  **Activate the virtual environment:**
     ```bash
-    source venv/bin/activate
+    source .venv/bin/activate
     ```
 
-3.  **Install dependencies:**
+4.  **Install dependencies:**
     ```bash
-    pip install -r requirements.txt
+    uv pip install -r requirements.txt
     ```
 
 ## How to Run `sync.py`

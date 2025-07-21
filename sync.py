@@ -3,6 +3,7 @@ import os
 import hashlib
 import shutil
 from collections import defaultdict
+import concurrent.futures
 
 def get_file_info(path, compare_mode):
     """Gets the size and checksum of a file."""
@@ -97,30 +98,8 @@ def print_change_report(changes, dest_path):
 
     print_tree('.')
 
-def confirm_and_execute(change_type, path, src_root, dest_root, trust):
-    """Asks for confirmation and executes the change."""
-    if trust.get(change_type):
-        print(f"Executing trusted action: {change_type} {path}")
-        execute_change(change_type, path, src_root, dest_root)
-        return
-
-    while True:
-        response = input(f"{change_type.capitalize()} '{path}'? (y/n/t): ").lower()
-        if response == 'y':
-            execute_change(change_type, path, src_root, dest_root)
-            break
-        elif response == 'n':
-            print(f"Skipping {change_type} of '{path}'")
-            break
-        elif response == 't':
-            trust[change_type] = True
-            execute_change(change_type, path, src_root, dest_root)
-            break
-        else:
-            print("Invalid input. Please enter y, n, or t.")
-
 def execute_change(change_type, path, src_root, dest_root):
-    """Executes the actual file operation."""
+    """Executes the actual file operation. Can be called from a thread."""
     src_path = os.path.join(src_root, path)
     dest_path = os.path.join(dest_root, path)
 
@@ -133,7 +112,8 @@ def execute_change(change_type, path, src_root, dest_root):
             os.remove(dest_path)
             print(f"Deleted '{path}'")
     except (IOError, OSError) as e:
-        print(f"Error during {change_type} of '{path}': {e}")
+        # Raise exception to be caught by the main thread
+        raise Exception(f"Error during {change_type} of '{path}': {e}")
 
 def main():
     parser = argparse.ArgumentParser(description="Synchronize two directories.")
@@ -166,17 +146,59 @@ def main():
         return
 
     print("\n--- Starting synchronization ---")
-    trust = {}
+    
+    # Use a thread pool to execute file operations in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
+        operation_order = [
+            ('copy', changes['to_copy']),
+            ('replace', changes['to_replace']),
+            ('delete', changes['to_delete'])
+        ]
 
-    for path in changes['to_copy']:
-        confirm_and_execute('copy', path, args.src, args.dest, trust)
+        for change_type, paths in operation_order:
+            if not paths:
+                continue
 
-    for path in changes['to_replace']:
-        confirm_and_execute('replace', path, args.src, args.dest, trust)
+            # Use an iterator to manage the list of paths
+            paths_iter = iter(paths)
 
-    for path in changes['to_delete']:
-        confirm_and_execute('delete', path, args.src, args.dest, trust)
+            for path in paths_iter:
+                while True:
+                    response = input(f"{change_type.capitalize()} '{path}'? (y/n/t): ").lower()
+                    if response in ['y', 'n', 't']:
+                        break
+                    else:
+                        print("Invalid input. Please enter y, n, or t.")
 
+                if response == 'y':
+                    try:
+                        # Execute synchronously
+                        execute_change(change_type, path, args.src, args.dest)
+                    except Exception as e:
+                        print(e)
+                
+                elif response == 'n':
+                    print(f"Skipping {change_type} of '{path}'")
+
+                elif response == 't':
+                    print(f"Trusting all subsequent '{change_type}' operations. Executing in parallel.")
+                    
+                    # Create a list of the current path and all remaining paths from the iterator
+                    remaining_paths = [path] + list(paths_iter)
+                    
+                    # Submit all trusted tasks to the executor
+                    future_to_path = {executor.submit(execute_change, change_type, p, args.src, args.dest): p for p in remaining_paths}
+                    
+                    for future in concurrent.futures.as_completed(future_to_path):
+                        try:
+                            # result() will re-raise any exception from the thread
+                            future.result()
+                        except Exception as exc:
+                            print(exc)
+                    
+                    # Once all parallel tasks for this type are done, break to the next change type
+                    break
+    
     print("Synchronization complete.")
 
 if __name__ == "__main__":

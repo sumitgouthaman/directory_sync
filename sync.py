@@ -4,6 +4,7 @@ import hashlib
 import shutil
 from collections import defaultdict
 import concurrent.futures
+from tqdm import tqdm
 
 def get_file_info(path, compare_mode):
     """Gets the size and checksum of a file."""
@@ -98,7 +99,7 @@ def print_change_report(changes, dest_path):
 
     print_tree('.')
 
-def execute_change(change_type, path, src_root, dest_root):
+def execute_change(change_type, path, src_root, dest_root, quiet=False):
     """Executes the actual file operation. Can be called from a thread."""
     src_path = os.path.join(src_root, path)
     dest_path = os.path.join(dest_root, path)
@@ -107,10 +108,12 @@ def execute_change(change_type, path, src_root, dest_root):
         if change_type == 'copy' or change_type == 'replace':
             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
             shutil.copy2(src_path, dest_path)
-            print(f"Copied/Replaced '{path}'")
+            if not quiet:
+                print(f"Copied/Replaced '{path}'")
         elif change_type == 'delete':
             os.remove(dest_path)
-            print(f"Deleted '{path}'")
+            if not quiet:
+                print(f"Deleted '{path}'")
     except (IOError, OSError) as e:
         # Raise exception to be caught by the main thread
         raise Exception(f"Error during {change_type} of '{path}': {e}")
@@ -187,14 +190,16 @@ def main():
                     remaining_paths = [path] + list(paths_iter)
                     
                     # Submit all trusted tasks to the executor
-                    future_to_path = {executor.submit(execute_change, change_type, p, args.src, args.dest): p for p in remaining_paths}
+                    future_to_path = {executor.submit(execute_change, change_type, p, args.src, args.dest, quiet=True): p for p in remaining_paths}
                     
-                    for future in concurrent.futures.as_completed(future_to_path):
+                    # Use tqdm to create a progress bar
+                    for future in tqdm(concurrent.futures.as_completed(future_to_path), total=len(remaining_paths), desc=f"Processing {change_type}"):
                         try:
                             # result() will re-raise any exception from the thread
                             future.result()
                         except Exception as exc:
-                            print(exc)
+                            # Print errors to the tqdm bar
+                            tqdm.write(str(exc))
                     
                     # Once all parallel tasks for this type are done, break to the next change type
                     break

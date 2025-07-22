@@ -7,3 +7,9 @@ __pycache__/
 
 # OS-specific
 .DS_Store
+
+# Python packaging and build artifacts
+*.egg-info/
+.pytest_cache/
+build/
+dist/

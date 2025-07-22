@@ -4,6 +4,8 @@ This script synchronizes two directories, a source and a destination, by copying
 
 ## Setup
 
+This project uses `uv` for fast environment and package management.
+
 1.  **Install `uv`:**
     Follow the instructions at [https://astral.sh/uv#installation](https://astral.sh/uv#installation) to install `uv`.
 
@@ -17,14 +19,39 @@ This script synchronizes two directories, a source and a destination, by copying
     source .venv/bin/activate
     ```
 
-4.  **Install dependencies:**
+4.  **Install the project in editable mode:**
     ```bash
-    uv pip install -r requirements.txt
+    uv pip install -e .
     ```
+    This will install the necessary dependencies and make the `directory-sync` command available in your shell.
 
-## How to Run `sync.py`
+## How to Run
 
-The `sync.py` script is the core of this project. It takes a source and a destination directory and synchronizes them.
+There are two ways to run the tool:
+
+### 1. Installing the Package
+
+This method installs the `directory-sync` command in your virtual environment, allowing you to run it from any directory.
+
+```bash
+# After activating the virtual environment
+uv pip install -e .
+```
+
+Once installed, you can run the tool as follows:
+
+```bash
+directory-sync --src /path/to/source --dest /path/to/destination
+```
+
+### 2. Running without Installation (Using `uv run`)
+
+This method is useful for development or for running the script without adding it to your environment's installed packages. `uv` will use the entry point defined in `pyproject.toml`.
+
+```bash
+# After activating the virtual environment
+uv run directory-sync --src /path/to/source --dest /path/to/destination
+```
 
 ### Command-Line Arguments
 
@@ -38,13 +65,13 @@ The `sync.py` script is the core of this project. It takes a source and a destin
 To perform a dry run of a synchronization, comparing files by size:
 
 ```bash
-python3 sync.py --src /path/to/source --dest /path/to/destination --dry_run
+uv run directory-sync -- --src /path/to/source --dest /path/to/destination --dry_run
 ```
 
 To execute the synchronization, comparing files by checksum:
 
 ```bash
-python3 sync.py --src /path/to/source --dest /path/to/destination --compare_mode checksum
+uv run directory-sync -- --src /path/to/source --dest /path/to/destination --compare_mode checksum
 ```
 
 ## Testing with Synthetic Data
@@ -67,17 +94,17 @@ The `generate_test_data.py` script creates two directories, `src` and `dest`, un
 To generate a test set with a maximum depth of 4, around 100 files, and each file being approximately 2KB:
 
 ```bash
-python3 testing/scripts/generate_test_data.py --max_depth 4 --approximate_files 100 --approximate_size_of_each_file 2048
+uv run python tests/generate_test_data.py --max_depth 4 --approximate_files 100 --approximate_size_of_each_file 2048
 ```
 
 The script will output the paths to the generated `src` and `dest` directories.
 
-### Running `sync.py` with Test Data
+### Running with Test Data
 
-Once the test data is generated, you can use the output paths to run `sync.py`:
+Once the test data is generated, you can use the output paths to run the tool:
 
 ```bash
-python3 sync.py --src /tmp/test_data/src --dest /tmp/test_data/dest --dry_run
+uv run directory-sync -- --src /tmp/test_data/src --dest /tmp/test_data/dest --dry_run
 ```
 
 This allows you to safely test the synchronization logic on a controlled set of data before using it on real directories.

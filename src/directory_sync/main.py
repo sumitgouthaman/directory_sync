@@ -158,6 +158,8 @@ def main():
     # Parallel scanning
     src_state = get_directory_state(args.src, args.compare_mode, args.workers)
     dest_state = get_directory_state(args.dest, args.compare_mode, args.workers)
+    print(f"Scanned {len(src_state)} files in source and {len(dest_state)} files in destination.")
+
     changes = compare_states(src_state, dest_state, args.compare_mode)
 
     print_change_report(changes, args.dest)

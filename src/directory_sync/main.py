@@ -14,23 +14,42 @@ def get_file_info(path, compare_mode):
         if compare_mode == 'checksum':
             hasher = hashlib.md5()
             with open(path, 'rb') as f:
-                buf = f.read(65536)
+                # Increased buffer size to 1MB
+                buf = f.read(1024 * 1024)
                 while len(buf) > 0:
                     hasher.update(buf)
-                    buf = f.read(65536)
+                    buf = f.read(1024 * 1024)
             info['checksum'] = hasher.hexdigest()
     except (IOError, OSError):
         return None
     return info
 
-def get_directory_state(path, compare_mode):
-    """Recursively gets the state of a directory."""
+def get_directory_state(path, compare_mode, max_workers=None):
+    """Recursively gets the state of a directory using parallel processing."""
     state = {}
+    files_to_process = []
+    
     for root, _, files in os.walk(path):
         for file in files:
             file_path = os.path.join(root, file)
             relative_path = os.path.relpath(file_path, path)
-            state[relative_path] = get_file_info(file_path, compare_mode)
+            files_to_process.append((file_path, relative_path))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_path = {
+            executor.submit(get_file_info, fp, compare_mode): rp 
+            for fp, rp in files_to_process
+        }
+        
+        for future in concurrent.futures.as_completed(future_to_path):
+            relative_path = future_to_path[future]
+            try:
+                info = future.result()
+                if info:
+                    state[relative_path] = info
+            except Exception:
+                pass
+                
     return state
 
 def compare_states(src_state, dest_state, compare_mode):
@@ -125,6 +144,7 @@ def main():
     parser.add_argument('--compare_mode', choices=['size', 'checksum'], default='size',
                         help="Comparison mode: size or checksum.")
     parser.add_argument('--dry_run', action='store_true', help="Only print changes, don't execute them.")
+    parser.add_argument('--workers', type=int, default=os.cpu_count() or 4, help="Number of worker threads.")
     args = parser.parse_args()
 
     if not os.path.isdir(args.src):
@@ -135,8 +155,9 @@ def main():
         return
 
     print("Analyzing directories...")
-    src_state = get_directory_state(args.src, args.compare_mode)
-    dest_state = get_directory_state(args.dest, args.compare_mode)
+    # Parallel scanning
+    src_state = get_directory_state(args.src, args.compare_mode, args.workers)
+    dest_state = get_directory_state(args.dest, args.compare_mode, args.workers)
     changes = compare_states(src_state, dest_state, args.compare_mode)
 
     print_change_report(changes, args.dest)
@@ -150,60 +171,58 @@ def main():
 
     print("\n--- Starting synchronization ---")
     
-    # Use a thread pool to execute file operations in parallel
-    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
-        operation_order = [
-            ('copy', changes['to_copy']),
-            ('replace', changes['to_replace']),
-            ('delete', changes['to_delete'])
-        ]
+    # Flatten all tasks
+    all_tasks = []
+    for path in changes['to_copy']:
+        all_tasks.append(('copy', path))
+    for path in changes['to_replace']:
+        all_tasks.append(('replace', path))
+    for path in changes['to_delete']:
+        all_tasks.append(('delete', path))
 
-        for change_type, paths in operation_order:
-            if not paths:
-                continue
+    if not all_tasks:
+        return
 
-            # Use an iterator to manage the list of paths
-            paths_iter = iter(paths)
+    # Interactive loop
+    tasks_iter = iter(all_tasks)
+    for change_type, path in tasks_iter:
+        while True:
+            response = input(f"{change_type.capitalize()} '{path}'? (y/n/t): ").lower()
+            if response in ['y', 'n', 't']:
+                break
+            else:
+                print("Invalid input. Please enter y, n, or t.")
 
-            for path in paths_iter:
-                while True:
-                    response = input(f"{change_type.capitalize()} '{path}'? (y/n/t): ").lower()
-                    if response in ['y', 'n', 't']:
-                        break
-                    else:
-                        print("Invalid input. Please enter y, n, or t.")
+        if response == 'y':
+            try:
+                execute_change(change_type, path, args.src, args.dest)
+            except Exception as e:
+                print(e)
+        
+        elif response == 'n':
+            print(f"Skipping {change_type} of '{path}'")
 
-                if response == 'y':
-                    try:
-                        # Execute synchronously
-                        execute_change(change_type, path, args.src, args.dest)
-                    except Exception as e:
-                        print(e)
+        elif response == 't':
+            print(f"Trusting all subsequent operations. Executing in parallel.")
+            
+            # Collect remaining tasks
+            remaining_tasks = [(change_type, path)] + list(tasks_iter)
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
+                future_to_task = {
+                    executor.submit(execute_change, c_type, p, args.src, args.dest, quiet=True): (c_type, p)
+                    for c_type, p in remaining_tasks
+                }
                 
-                elif response == 'n':
-                    print(f"Skipping {change_type} of '{path}'")
+                for future in tqdm(concurrent.futures.as_completed(future_to_task), total=len(remaining_tasks), desc="Synchronizing"):
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        tqdm.write(str(exc))
+            
+            # All done
+            break
 
-                elif response == 't':
-                    print(f"Trusting all subsequent '{change_type}' operations. Executing in parallel.")
-                    
-                    # Create a list of the current path and all remaining paths from the iterator
-                    remaining_paths = [path] + list(paths_iter)
-                    
-                    # Submit all trusted tasks to the executor
-                    future_to_path = {executor.submit(execute_change, change_type, p, args.src, args.dest, quiet=True): p for p in remaining_paths}
-                    
-                    # Use tqdm to create a progress bar
-                    for future in tqdm(concurrent.futures.as_completed(future_to_path), total=len(remaining_paths), desc=f"Processing {change_type}"):
-                        try:
-                            # result() will re-raise any exception from the thread
-                            future.result()
-                        except Exception as exc:
-                            # Print errors to the tqdm bar
-                            tqdm.write(str(exc))
-                    
-                    # Once all parallel tasks for this type are done, break to the next change type
-                    break
-    
     print("Synchronization complete.")
 
 if __name__ == "__main__":

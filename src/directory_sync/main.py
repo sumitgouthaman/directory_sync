@@ -2,6 +2,7 @@ import argparse
 import os
 import hashlib
 import shutil
+import subprocess
 from collections import defaultdict
 import concurrent.futures
 from tqdm import tqdm
@@ -137,6 +138,23 @@ def execute_change(change_type, path, src_root, dest_root, quiet=False):
         # Raise exception to be caught by the main thread
         raise Exception(f"Error during {change_type} of '{path}': {e}")
 
+def check_rsync_available():
+    """Returns True if rsync is available on this machine."""
+    return shutil.which('rsync') is not None
+
+def build_rsync_command(src, dest, compare_mode):
+    """Builds an rsync command equivalent to what this program would do."""
+    # Ensure src ends with '/' so rsync copies the *contents* of src into dest
+    src_normalized = src.rstrip(os.sep) + os.sep
+
+    cmd = ['rsync', '-av', '--delete']
+
+    if compare_mode == 'checksum':
+        cmd.append('--checksum')
+
+    cmd += [src_normalized, dest]
+    return cmd
+
 def main():
     parser = argparse.ArgumentParser(description="Synchronize two directories.")
     parser.add_argument('--src', required=True, help="Source directory path.")
@@ -170,6 +188,21 @@ def main():
 
     if not any(changes.values()):
         return
+
+    # Offer rsync as an alternative if it's available
+    if check_rsync_available():
+        print("\nrsync is available on this machine.")
+        rsync_response = input("Use rsync to perform the sync? (y/n): ").strip().lower()
+        if rsync_response == 'y':
+            cmd = build_rsync_command(args.src, args.dest, args.compare_mode)
+            print(f"\nCommand to run:\n  {' '.join(cmd)}")
+            confirm = input("\nConfirm execution? (y/n): ").strip().lower()
+            if confirm == 'y':
+                subprocess.run(cmd)
+                print("\nSynchronization complete (via rsync).")
+            else:
+                print("Aborted.")
+            return
 
     print("\n--- Starting synchronization ---")
     
